@@ -1,0 +1,3 @@
+[functions.rescue-ai]
+verify_jwt = false
+entrypoint = "./functions/rescue-ai/index.ts"
