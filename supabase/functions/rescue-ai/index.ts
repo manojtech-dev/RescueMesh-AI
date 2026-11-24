@@ -30,9 +30,7 @@ function demoAnalysis(incident: IncidentInput) {
   const priority = Math.min(100, Math.max(20, 40 + trapped * 2 + Math.min(25, affected / 10) + waterLevel * 8));
   const severity = priority >= 80 || trapped >= 10 ? "Critical" : priority >= 60 ? "High" : priority >= 40 ? "Medium" : "Low";
   return {
-    mode: "DEMO MODE",
-    severity,
-    priority: Math.round(priority),
+    mode: "DEMO MODE", severity, priority: Math.round(priority),
     reasoning: `Demo assessment uses ${trapped} trapped people, ${affected} affected people, and ${waterLevel}m reported water. Missing details remain flagged for human verification.`,
     peopleAtRisk: Math.max(trapped, Math.round(affected * 0.35)),
     resources: ["Rescue boat", "Life jackets", trapped > 0 ? "Medical kit" : "Drinking water"],
@@ -55,19 +53,19 @@ function demoAssistant(workspace: Workspace, question: string) {
   return { mode: "DEMO MODE", answer: `The workspace has ${incidents.filter((incident) => incident.status !== "Resolved").length} unresolved incidents and ${teams.filter((team) => team.status === "Available").length} available teams. Ask about a priority, team, or resource.` };
 }
 
-async function callGemini(prompt: string) {
-  const apiKey = Deno.env.get("GEMINI_API_KEY");
+async function callOpenRouter(messages: Array<{ role: string; content: unknown }>, model?: string) {
+  const apiKey = Deno.env.get("OPENROUTER_API_KEY");
   if (!apiKey) return null;
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, responseMimeType: "application/json" } }),
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "HTTP-Referer": "https://rescuemesh.ai", "X-Title": "RescueMesh AI" },
+    body: JSON.stringify({ model: model || Deno.env.get("OPENROUTER_MODEL") || "openai/gpt-4o-mini", messages, temperature: 0.2, response_format: { type: "json_object" } }),
   });
-  if (!response.ok) throw new Error(`Gemini request failed (${response.status})`);
+  if (!response.ok) throw new Error(`OpenRouter request failed (${response.status})`);
   const payload = await response.json();
-  const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (typeof text !== "string") throw new Error("Gemini returned no usable response");
-  return JSON.parse(text.replace(/^```json\s*/i, "").replace(/\s*```$/, ""));
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content !== "string") throw new Error("OpenRouter returned no usable response");
+  return JSON.parse(content.replace(/^```json\s*/i, "").replace(/\s*```$/, ""));
 }
 
 Deno.serve(async (request) => {
@@ -77,15 +75,21 @@ Deno.serve(async (request) => {
     const body = await request.json();
     if (body.action === "analyze") {
       const incident = body.incident as IncidentInput;
-      const prompt = `You are a cautious emergency response analyst. Analyze this flood report and return only JSON with keys mode, severity, priority, reasoning, peopleAtRisk, resources, actions, teamType, medicalUrgency, responseUrgency, nextAction. Severity must be Critical, High, Medium, or Low. Priority must be 0-100. Never downgrade a life-threatening report because information is missing; clearly mark uncertainty. Report: ${JSON.stringify(incident)}`;
-      const result = await callGemini(prompt);
-      return json(result ? { ...result, mode: "GEMINI" } : demoAnalysis(incident));
+      const prompt = `You are a cautious emergency response analyst. Understand English or Tamil. Return only JSON with keys mode, severity, priority, reasoning, peopleAtRisk, resources, actions, teamType, medicalUrgency, responseUrgency, nextAction. Severity must be Critical, High, Medium, or Low. Priority must be 0-100. Never downgrade a life-threatening report because information is missing; clearly mark uncertainty. Report: ${JSON.stringify(incident)}`;
+      const result = await callOpenRouter([{ role: "system", content: prompt }, { role: "user", content: JSON.stringify(incident) }], body.model);
+      return json(result ? { ...result, mode: "OPENROUTER" } : demoAnalysis(incident));
     }
     if (body.action === "assistant") {
       const workspace = body.workspace as Workspace;
       const question = typeof body.question === "string" ? body.question : "Summarize the response picture";
-      const result = await callGemini(`You are RescueMesh AI Assistant. Use only the supplied workspace data. Answer the question concisely, mention uncertainty, and do not claim to dispatch teams. Return JSON with keys mode and answer. Workspace: ${JSON.stringify(workspace)} Question: ${question}`);
-      return json(result ? { ...result, mode: "GEMINI" } : demoAssistant(workspace, question));
+      const result = await callOpenRouter([{ role: "system", content: "You are RescueMesh AI Assistant. Use only the supplied workspace data. Return JSON with keys mode and answer. Be concise, mention uncertainty, and never claim to dispatch teams." }, { role: "user", content: `Workspace: ${JSON.stringify(workspace)}\nQuestion: ${question}` }], body.model);
+      return json(result ? { ...result, mode: "OPENROUTER" } : demoAssistant(workspace, question));
+    }
+    if (body.action === "image") {
+      const imageData = typeof body.imageData === "string" ? body.imageData : "";
+      if (!imageData) return json({ error: "Image data is required" }, 400);
+      const result = await callOpenRouter([{ role: "user", content: [{ type: "text", text: "Analyze this flood image. Return JSON with keys mode, summary, visibleWaterConditions, possibleRoadInundation, infrastructureDamage, hazards, uncertainty. Never claim exact water depth or identify trapped people from an image alone." }, { type: "image_url", image_url: { url: imageData } }] }], body.model);
+      return json(result ? { ...result, mode: "OPENROUTER" } : { mode: "DEMO MODE", summary: "Image analysis is unavailable without the OpenRouter vision connection.", uncertainty: "A photograph cannot establish exact water depth or verify trapped people." });
     }
     return json({ error: "Unknown action" }, 400);
   } catch (error) {
