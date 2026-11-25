@@ -21,6 +21,10 @@ type Workspace = {
   resources?: Array<{ name: string; amount: number; unit: string }>;
 };
 
+type FeedSource = { name: string; status: string; detail: string };
+
+type FireHotspot = { id: string; lat: number; lng: number; brightness?: number; confidence?: string | number; observedAt?: string; source: string };
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
 function demoAnalysis(incident: IncidentInput) {
@@ -53,6 +57,73 @@ function demoAssistant(workspace: Workspace, question: string) {
   return { mode: "DEMO MODE", answer: `The workspace has ${incidents.filter((incident) => incident.status !== "Resolved").length} unresolved incidents and ${teams.filter((team) => team.status === "Available").length} available teams. Ask about a priority, team, or resource.` };
 }
 
+function parseFirmsCsv(csv: string): FireHotspot[] {
+  const lines = csv.trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map((header) => header.trim());
+  const indexOf = (name: string) => headers.indexOf(name);
+  return lines.slice(1).map((line, rowIndex) => {
+    const values = line.split(",");
+    const latitude = Number(values[indexOf("latitude")]);
+    const longitude = Number(values[indexOf("longitude")]);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+    const confidenceIndex = indexOf("confidence");
+    const brightnessIndex = indexOf("bright_ti4");
+    const dateIndex = indexOf("acq_date");
+    const timeIndex = indexOf("acq_time");
+    return {
+      id: `firms-${values[dateIndex] || "unknown"}-${values[timeIndex] || rowIndex}-${latitude}-${longitude}`,
+      lat: latitude,
+      lng: longitude,
+      brightness: brightnessIndex >= 0 ? Number(values[brightnessIndex]) : undefined,
+      confidence: confidenceIndex >= 0 ? values[confidenceIndex] : undefined,
+      observedAt: dateIndex >= 0 ? `${values[dateIndex]} ${values[timeIndex] || ""}`.trim() : undefined,
+      source: "NASA FIRMS",
+    };
+  }).filter((hotspot): hotspot is FireHotspot => hotspot !== null);
+}
+
+async function checkSource(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { method: "GET", signal: AbortSignal.timeout(8000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function liveFeeds() {
+  const sources: FeedSource[] = [];
+  const messages: string[] = [];
+  let fireHotspots: FireHotspot[] = [];
+  const firmsKey = Deno.env.get("NASA_FIRMS_API_KEY") || Deno.env.get("NASA_FIRMS_MAP_KEY");
+  if (!firmsKey) {
+    sources.push({ name: "NASA FIRMS", status: "not_configured", detail: "A server-side FIRMS MAP_KEY is required before satellite detections can be requested." });
+    messages.push("NASA FIRMS is waiting for a server-side MAP_KEY.");
+  } else {
+    try {
+      const response = await fetch(`https://firms.modaps.eosdis.nasa.gov/api/area/csv/${firmsKey}/VIIRS_SNPP_NRT/68,6,98,37/1`);
+      if (!response.ok) throw new Error(`FIRMS request failed (${response.status})`);
+      fireHotspots = parseFirmsCsv(await response.text());
+      sources.push({ name: "NASA FIRMS", status: "connected", detail: `${fireHotspots.length} satellite detections returned for India.` });
+    } catch (error) {
+      sources.push({ name: "NASA FIRMS", status: "unavailable", detail: error instanceof Error ? error.message : "FIRMS could not be reached." });
+      messages.push("NASA FIRMS did not return a usable response.");
+    }
+  }
+
+  const [sachetOnline, imdOnline] = await Promise.all([
+    checkSource("https://sachet.ndma.gov.in"),
+    checkSource("https://api.imd.gov.in/public/api_reference.html"),
+  ]);
+  sources.push({ name: "NDMA SACHET", status: sachetOnline ? "portal_reachable" : "unavailable", detail: sachetOnline ? "Official alert portal is reachable. A machine-readable CAP/RSS feed is not exposed through this gateway." : "Official SACHET portal could not be reached." });
+  sources.push({ name: "IMD", status: imdOnline ? "portal_reachable" : "unavailable", detail: imdOnline ? "Official API reference is reachable. No warning feed has been configured in this workspace." : "Official IMD API reference could not be reached." });
+  if (sachetOnline || imdOnline) messages.push("Official warning portals are reachable, but no alert records were returned by a configured machine-readable feed.");
+  const connected = sources.some((source) => source.status === "connected");
+  const partial = sources.some((source) => source.status === "portal_reachable") || sources.some((source) => source.status === "unavailable");
+  return { status: connected ? "connected" : partial ? "partial" : "offline", fireHotspots, weatherWarnings: [], sources, lastUpdated: new Date().toISOString(), messages };
+}
+
 async function callOpenRouter(messages: Array<{ role: string; content: unknown }>, model?: string) {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY");
   if (!apiKey) return null;
@@ -73,6 +144,7 @@ Deno.serve(async (request) => {
   try {
     if (request.method !== "POST") return json({ error: "POST required" }, 405);
     const body = await request.json();
+    if (body.action === "feeds") return json(await liveFeeds());
     if (body.action === "analyze") {
       const incident = body.incident as IncidentInput;
       const prompt = `You are a cautious emergency response analyst. Understand English or Tamil. Return only JSON with keys mode, severity, priority, reasoning, peopleAtRisk, resources, actions, teamType, medicalUrgency, responseUrgency, nextAction. Severity must be Critical, High, Medium, or Low. Priority must be 0-100. Never downgrade a life-threatening report because information is missing; clearly mark uncertainty. Report: ${JSON.stringify(incident)}`;
