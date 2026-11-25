@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   Activity,
   AlertTriangle,
   Ambulance,
+  Building2,
   ArrowRight,
   BarChart3,
   Bell,
@@ -13,27 +14,34 @@ import {
   ChevronDown,
   ChevronRight,
   CircleHelp,
+  CloudLightning,
   CloudRain,
   Droplets,
   FileText,
   Filter,
+  Flame,
   Globe2,
   Home,
   Layers3,
+  LocateFixed,
   Map,
   Menu,
   MessageSquare,
   Package,
   Plus,
+  Radio,
   RefreshCw,
   Search,
   Send,
+  Satellite,
   Settings,
   ShieldCheck,
   Siren,
   Sparkles,
   Truck,
   Users,
+  Waves,
+  Wifi,
   X,
   Zap,
 } from 'lucide-react';
@@ -56,18 +64,61 @@ type Team = { id: string; name: string; state?: string; district?: string; city:
 type Resource = { id: string; name: string; amount: number; unit: string; threshold: number; icon: string; state?: string; district?: string; city?: string };
 type Log = { id: string; action: string; detail: string; time: string; status: 'Completed' | 'Pending' };
 type AppState = { incidents: Incident[]; teams: Team[]; resources: Resource[]; logs: Log[] };
+type FireHotspot = { id: string; lat: number; lng: number; brightness?: number; confidence?: string | number; observedAt?: string; source: string };
+type WeatherWarning = { id: string; title: string; state?: string; district?: string; city?: string; lat?: number; lng?: number; severity?: Severity; source: string; updatedAt?: string; detail?: string };
+type FeedSource = { name: string; status: 'connected' | 'not_configured' | 'portal_reachable' | 'unavailable'; detail: string };
+type LiveFeeds = { status: 'loading' | 'connected' | 'partial' | 'offline'; fireHotspots: FireHotspot[]; weatherWarnings: WeatherWarning[]; sources: FeedSource[]; lastUpdated?: string; messages: string[] };
 
 const vellore = { lat: 12.9165, lng: 79.1325 };
 const indiaStates = ['Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry'];
 const cityDirectory = [
-  { city: 'Vellore', district: 'Vellore', state: 'Tamil Nadu', lat: 12.9165, lng: 79.1325 }, { city: 'Chennai', district: 'Chennai', state: 'Tamil Nadu', lat: 13.0827, lng: 80.2707 }, { city: 'Coimbatore', district: 'Coimbatore', state: 'Tamil Nadu', lat: 11.0168, lng: 76.9558 }, { city: 'Madurai', district: 'Madurai', state: 'Tamil Nadu', lat: 9.9252, lng: 78.1198 }, { city: 'Bengaluru', district: 'Bengaluru Urban', state: 'Karnataka', lat: 12.9716, lng: 77.5946 }, { city: 'Hyderabad', district: 'Hyderabad', state: 'Telangana', lat: 17.385, lng: 78.4867 }, { city: 'Mumbai', district: 'Mumbai City', state: 'Maharashtra', lat: 19.076, lng: 72.8777 }, { city: 'New Delhi', district: 'New Delhi', state: 'Delhi', lat: 28.6139, lng: 77.209 }, { city: 'Kolkata', district: 'Kolkata', state: 'West Bengal', lat: 22.5726, lng: 88.3639 }, { city: 'Kochi', district: 'Ernakulam', state: 'Kerala', lat: 9.9312, lng: 76.2673 },
+  { city: 'Vellore', district: 'Vellore', state: 'Tamil Nadu', lat: 12.9165, lng: 79.1325 },
+  { city: 'Chennai', district: 'Chennai', state: 'Tamil Nadu', lat: 13.0827, lng: 80.2707 },
+  { city: 'Coimbatore', district: 'Coimbatore', state: 'Tamil Nadu', lat: 11.0168, lng: 76.9558 },
+  { city: 'Madurai', district: 'Madurai', state: 'Tamil Nadu', lat: 9.9252, lng: 78.1198 },
+  { city: 'Salem', district: 'Salem', state: 'Tamil Nadu', lat: 11.6643, lng: 78.146 },
+  { city: 'Tiruchirappalli', district: 'Tiruchirappalli', state: 'Tamil Nadu', lat: 10.7905, lng: 78.7047 },
+  { city: 'Bengaluru', district: 'Bengaluru Urban', state: 'Karnataka', lat: 12.9716, lng: 77.5946 },
+  { city: 'Hyderabad', district: 'Hyderabad', state: 'Telangana', lat: 17.385, lng: 78.4867 },
+  { city: 'Mumbai', district: 'Mumbai City', state: 'Maharashtra', lat: 19.076, lng: 72.8777 },
+  { city: 'Pune', district: 'Pune', state: 'Maharashtra', lat: 18.5204, lng: 73.8567 },
+  { city: 'New Delhi', district: 'New Delhi', state: 'Delhi', lat: 28.6139, lng: 77.209 },
+  { city: 'Kolkata', district: 'Kolkata', state: 'West Bengal', lat: 22.5726, lng: 88.3639 },
+  { city: 'Kochi', district: 'Ernakulam', state: 'Kerala', lat: 9.9312, lng: 76.2673 },
+  { city: 'Thiruvananthapuram', district: 'Thiruvananthapuram', state: 'Kerala', lat: 8.5241, lng: 76.9366 },
+  { city: 'Ahmedabad', district: 'Ahmedabad', state: 'Gujarat', lat: 23.0225, lng: 72.5714 },
+  { city: 'Jaipur', district: 'Jaipur', state: 'Rajasthan', lat: 26.9124, lng: 75.7873 },
+  { city: 'Lucknow', district: 'Lucknow', state: 'Uttar Pradesh', lat: 26.8467, lng: 80.9462 },
+  { city: 'Patna', district: 'Patna', state: 'Bihar', lat: 25.5941, lng: 85.1376 },
+  { city: 'Bhopal', district: 'Bhopal', state: 'Madhya Pradesh', lat: 23.2599, lng: 77.4126 },
+  { city: 'Bhubaneswar', district: 'Khordha', state: 'Odisha', lat: 20.2961, lng: 85.8245 },
+  { city: 'Guwahati', district: 'Kamrup Metropolitan', state: 'Assam', lat: 26.1445, lng: 91.7362 },
+  { city: 'Ranchi', district: 'Ranchi', state: 'Jharkhand', lat: 23.3441, lng: 85.3096 },
+  { city: 'Raipur', district: 'Raipur', state: 'Chhattisgarh', lat: 21.2514, lng: 81.6296 },
+  { city: 'Dehradun', district: 'Dehradun', state: 'Uttarakhand', lat: 30.3165, lng: 78.0322 },
+  { city: 'Shimla', district: 'Shimla', state: 'Himachal Pradesh', lat: 31.1048, lng: 77.1734 },
+  { city: 'Panaji', district: 'North Goa', state: 'Goa', lat: 15.4909, lng: 73.8278 },
+  { city: 'Imphal', district: 'Imphal West', state: 'Manipur', lat: 24.817, lng: 93.9368 },
+  { city: 'Shillong', district: 'East Khasi Hills', state: 'Meghalaya', lat: 25.5788, lng: 91.8933 },
+  { city: 'Aizawl', district: 'Aizawl', state: 'Mizoram', lat: 23.7271, lng: 92.7176 },
+  { city: 'Kohima', district: 'Kohima', state: 'Nagaland', lat: 25.6751, lng: 94.1086 },
+  { city: 'Agartala', district: 'West Tripura', state: 'Tripura', lat: 23.8315, lng: 91.2868 },
+  { city: 'Gangtok', district: 'East Sikkim', state: 'Sikkim', lat: 27.3389, lng: 88.6065 },
+  { city: 'Vijayawada', district: 'NTR', state: 'Andhra Pradesh', lat: 16.5062, lng: 80.648 },
+  { city: 'Visakhapatnam', district: 'Visakhapatnam', state: 'Andhra Pradesh', lat: 17.6868, lng: 83.2185 },
+  { city: 'Chandigarh', district: 'Chandigarh', state: 'Chandigarh', lat: 30.7333, lng: 76.7794 },
+  { city: 'Srinagar', district: 'Srinagar', state: 'Jammu and Kashmir', lat: 34.0837, lng: 74.7973 },
+  { city: 'Leh', district: 'Leh', state: 'Ladakh', lat: 34.1526, lng: 77.5771 },
+  { city: 'Port Blair', district: 'South Andaman', state: 'Andaman and Nicobar Islands', lat: 11.6234, lng: 92.7265 },
+  { city: 'Kavaratti', district: 'Lakshadweep', state: 'Lakshadweep', lat: 10.5669, lng: 72.642 },
+  { city: 'Puducherry', district: 'Puducherry', state: 'Puducherry', lat: 11.9416, lng: 79.8083 },
 ];
-const locationOptions = ['All India', ...indiaStates, ...cityDirectory.map((item) => item.city).filter((city, index, cities) => cities.indexOf(city) === index)];
-const mapLocations: Record<string, { lat: number; lng: number; zoom: number }> = {
-  'All India': { lat: 22.5, lng: 79, zoom: 5 },
-  'Tamil Nadu': { lat: 11.1271, lng: 78.6569, zoom: 7 },
-  ...Object.fromEntries(cityDirectory.map((item) => [item.city, { lat: item.lat, lng: item.lng, zoom: 12 }])),
+const stateCenters: Record<string, { lat: number; lng: number; zoom: number }> = {
+  'Andhra Pradesh': { lat: 15.9129, lng: 79.74, zoom: 7 }, 'Arunachal Pradesh': { lat: 28.218, lng: 94.7278, zoom: 7 }, Assam: { lat: 26.2, lng: 92.9, zoom: 7 }, Bihar: { lat: 25.0961, lng: 85.3131, zoom: 7 }, Chhattisgarh: { lat: 21.2787, lng: 81.8661, zoom: 7 }, Goa: { lat: 15.2993, lng: 74.124, zoom: 9 }, Gujarat: { lat: 22.2587, lng: 71.1924, zoom: 7 }, Haryana: { lat: 29.0588, lng: 76.0856, zoom: 8 }, 'Himachal Pradesh': { lat: 31.1048, lng: 77.1734, zoom: 8 }, Jharkhand: { lat: 23.6102, lng: 85.2799, zoom: 7 }, Karnataka: { lat: 15.3173, lng: 75.7139, zoom: 7 }, Kerala: { lat: 10.8505, lng: 76.2711, zoom: 8 }, 'Madhya Pradesh': { lat: 22.9734, lng: 78.6569, zoom: 7 }, Maharashtra: { lat: 19.7515, lng: 75.7139, zoom: 7 }, Manipur: { lat: 24.6637, lng: 93.9063, zoom: 8 }, Meghalaya: { lat: 25.467, lng: 91.3662, zoom: 8 }, Mizoram: { lat: 23.1645, lng: 92.9376, zoom: 8 }, Nagaland: { lat: 26.1584, lng: 94.5624, zoom: 8 }, Odisha: { lat: 20.9517, lng: 85.0985, zoom: 7 }, Punjab: { lat: 31.1471, lng: 75.3412, zoom: 8 }, Rajasthan: { lat: 27.0238, lng: 74.2179, zoom: 7 }, Sikkim: { lat: 27.533, lng: 88.5122, zoom: 9 }, 'Tamil Nadu': { lat: 11.1271, lng: 78.6569, zoom: 7 }, Telangana: { lat: 18.1124, lng: 79.0193, zoom: 7 }, Tripura: { lat: 23.9408, lng: 91.9882, zoom: 8 }, 'Uttar Pradesh': { lat: 26.8467, lng: 80.9462, zoom: 7 }, Uttarakhand: { lat: 30.0668, lng: 79.0193, zoom: 8 }, 'West Bengal': { lat: 22.9868, lng: 87.855, zoom: 7 }, 'Andaman and Nicobar Islands': { lat: 11.7401, lng: 92.6586, zoom: 7 }, Chandigarh: { lat: 30.7333, lng: 76.7794, zoom: 12 }, 'Dadra and Nagar Haveli and Daman and Diu': { lat: 20.1809, lng: 73.0169, zoom: 9 }, Delhi: { lat: 28.7041, lng: 77.1025, zoom: 10 }, 'Jammu and Kashmir': { lat: 33.7782, lng: 76.5762, zoom: 7 }, Ladakh: { lat: 34.2268, lng: 77.5619, zoom: 8 }, Lakshadweep: { lat: 10.1, lng: 72.64, zoom: 7 }, Puducherry: { lat: 11.9416, lng: 79.8083, zoom: 11 },
 };
+const locationOptions = ['All India', ...indiaStates, ...cityDirectory.map((item) => item.city).filter((city, index, cities) => cities.indexOf(city) === index)];
+const mapLocations: Record<string, { lat: number; lng: number; zoom: number }> = { 'All India': { lat: 22.5, lng: 79, zoom: 5 }, ...stateCenters, ...Object.fromEntries(cityDirectory.map((item) => [item.city, { lat: item.lat, lng: item.lng, zoom: 12 }])) };
+const INDIA_BOUNDARIES_URL = 'https://raw.githubusercontent.com/datameet/maps/master/States/india_states.geojson';
 const initialState: AppState = {
   incidents: [
     { id: 'inc-1', title: 'Trapped families near Bus Stand', state: 'Tamil Nadu', city: 'Vellore', district: 'Vellore', location: 'Vellore Old Bus Stand', lat: 12.9222, lng: 79.1328, severity: 'Critical', status: 'Assigned', waterLevel: 2.2, affected: 240, trapped: 34, vulnerable: '8 children, 3 elderly', medical: '2 reported injuries', description: 'Rising water has entered ground-floor homes around the bus stand. Residents are stranded on upper floors.', priority: 96, time: '12 min ago', teamId: 'team-1' },
@@ -110,6 +161,17 @@ async function callRescueAi(payload: Record<string, unknown>) {
   return result as Record<string, unknown>;
 }
 
+const emptyFeeds: LiveFeeds = { status: 'offline', fireHotspots: [], weatherWarnings: [], sources: [], messages: ['No live source response yet.'] };
+
+async function fetchLiveFeeds(): Promise<LiveFeeds> {
+  if (!aiEndpoint) return { ...emptyFeeds, messages: ['The live feed gateway is not connected.'] };
+  const response = await fetch(aiEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(supabaseKey ? { Authorization: `Bearer ${supabaseKey}`, apikey: supabaseKey } : {}) }, body: JSON.stringify({ action: 'feeds' }) });
+  const result: unknown = await response.json();
+  if (!response.ok || !result || typeof result !== 'object' || !('status' in result)) throw new Error('Live feed gateway returned an invalid response');
+  const payload = result as { status?: LiveFeeds['status']; fireHotspots?: FireHotspot[]; weatherWarnings?: WeatherWarning[]; sources?: FeedSource[]; lastUpdated?: string; messages?: string[] };
+  return { status: payload.status || 'offline', fireHotspots: Array.isArray(payload.fireHotspots) ? payload.fireHotspots : [], weatherWarnings: Array.isArray(payload.weatherWarnings) ? payload.weatherWarnings : [], sources: Array.isArray(payload.sources) ? payload.sources : [], lastUpdated: payload.lastUpdated, messages: Array.isArray(payload.messages) ? payload.messages : [] };
+}
+
 function fallbackAnalysis(incident: Pick<Incident, 'trapped' | 'affected' | 'waterLevel' | 'medical'>): Analysis {
   const priority = Math.min(100, Math.max(20, 40 + incident.trapped * 2 + Math.min(25, incident.affected / 10) + incident.waterLevel * 8));
   const severity: Severity = priority >= 80 || incident.trapped >= 10 ? 'Critical' : priority >= 60 ? 'High' : priority >= 40 ? 'Medium' : 'Low';
@@ -125,48 +187,91 @@ function severityClass(severity: Severity) { return { Critical: 'critical', High
 function formatNumber(value: number) { return new Intl.NumberFormat('en-IN').format(value); }
 function nowTime() { return new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }); }
 
-function MapPanel({ state, full = false, locationFilter = 'All India', selectedIncident, searchQuery = '', onSelectIncident }: { state: AppState; full?: boolean; locationFilter?: string; selectedIncident?: Incident | null; searchQuery?: string; onSelectIncident?: (incident: Incident) => void }) {
+type LayerKey = 'incidents' | 'weather' | 'fires' | 'teams' | 'relief' | 'infrastructure' | 'density';
+
+function MapPanel({ state, feeds, full = false, locationFilter = 'All India', selectedIncident, searchQuery = '', onSelectIncident }: { state: AppState; feeds: LiveFeeds; full?: boolean; locationFilter?: string; selectedIncident?: Incident | null; searchQuery?: string; onSelectIncident?: (incident: Incident) => void }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletRef = useRef<L.Map | null>(null);
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
+  const boundaryLayerRef = useRef<L.GeoJSON | null>(null);
   const routeLayerRef = useRef<L.Polyline | null>(null);
+  const [boundaryData, setBoundaryData] = useState<GeoJSON.GeoJsonObject | null>(null);
+  const [boundaryMessage, setBoundaryMessage] = useState('Loading state boundaries');
+  const [layers, setLayers] = useState<Record<LayerKey, boolean>>({ incidents: true, weather: true, fires: true, teams: true, relief: true, infrastructure: false, density: false });
 
   useEffect(() => {
     if (!mapRef.current || leafletRef.current) return;
-    const map = L.map(mapRef.current, { zoomControl: false }).setView([22.5, 79], 5);
+    const map = L.map(mapRef.current, { zoomControl: false, preferCanvas: true }).setView([22.5, 79], 5);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors', maxZoom: 19 }).addTo(map);
     L.control.zoom({ position: 'topright' }).addTo(map);
     markerLayerRef.current = L.layerGroup().addTo(map);
     leafletRef.current = map;
     const resizeObserver = new ResizeObserver(() => map.invalidateSize());
     resizeObserver.observe(mapRef.current);
-    return () => { resizeObserver.disconnect(); map.remove(); leafletRef.current = null; markerLayerRef.current = null; routeLayerRef.current = null; };
+    return () => { resizeObserver.disconnect(); map.remove(); leafletRef.current = null; markerLayerRef.current = null; boundaryLayerRef.current = null; routeLayerRef.current = null; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch(INDIA_BOUNDARIES_URL).then((response) => { if (!response.ok) throw new Error('Boundary source unavailable'); return response.json() as Promise<GeoJSON.GeoJsonObject>; }).then((data) => { if (active) { setBoundaryData(data); setBoundaryMessage('State boundaries online'); } }).catch(() => { if (active) setBoundaryMessage('State boundaries unavailable'); });
+    return () => { active = false; };
+  }, []);
+
+  const normalized = (value: string) => value.toLowerCase().replace(/[āáà]/g, 'a').replace(/[īíì]/g, 'i').replace(/[ūúù]/g, 'u').replace(/[^a-z0-9]/g, '');
+  const featureName = (feature: GeoJSON.Feature | undefined) => { const props = feature?.properties as Record<string, unknown> | null | undefined; return String(props?.shapeName ?? props?.NAME_1 ?? props?.ST_NM ?? props?.state ?? props?.name ?? 'State boundary'); };
+  const featureMatchesLocation = (feature: GeoJSON.Feature | undefined, location: string) => { const name = normalized(featureName(feature)); const target = normalized(location); return name === target || (target === 'delhi' && name.includes('delhi')) || (target === 'dadraandnagarhavelianddamananddiu' && name.includes('dadra')); };
+  const matchesScope = (item: { state?: string; city?: string; district?: string }) => { const city = item.city ? cityDirectory.find((entry) => entry.city === item.city) : undefined; return locationFilter === 'All India' || item.state === locationFilter || item.city === locationFilter || item.district === locationFilter || city?.state === locationFilter; };
+  const popup = (title: string, rows: string[]) => { const container = document.createElement('div'); const heading = document.createElement('strong'); heading.textContent = title; container.append(heading); rows.forEach((row) => { container.append(document.createElement('br')); container.append(document.createTextNode(row)); }); return container; };
+
+  useEffect(() => {
+    const map = leafletRef.current;
+    if (!map || !boundaryData) return;
+    boundaryLayerRef.current?.removeFrom(map);
+    const layer = L.geoJSON(boundaryData, { style: (feature) => ({ color: featureMatchesLocation(feature, locationFilter) ? '#5cf6ff' : '#25b8d0', weight: featureMatchesLocation(feature, locationFilter) ? 2.8 : 1.25, opacity: featureMatchesLocation(feature, locationFilter) ? 1 : .72, fillColor: featureMatchesLocation(feature, locationFilter) ? '#0e8eaa' : '#073c5b', fillOpacity: featureMatchesLocation(feature, locationFilter) ? .22 : .08 }), onEachFeature: (feature, stateLayer) => { const name = featureName(feature); stateLayer.bindTooltip(name, { sticky: true, className: 'state-tooltip' }); stateLayer.bindPopup(popup(name, ['Source: DataMeet India community boundaries', 'Click to focus this state'])); stateLayer.on('click', () => map.flyToBounds(stateLayer.getBounds(), { duration: .8, padding: [28, 28] })); } }).addTo(map);
+    boundaryLayerRef.current = layer;
+    setBoundaryMessage('State boundaries online');
+  }, [boundaryData, locationFilter]);
+
+  useEffect(() => {
+    const map = leafletRef.current;
+    if (!map) return;
+    const search = searchQuery.trim().toLowerCase();
+    const searchedCity = search ? cityDirectory.find((item) => `${item.city} ${item.district} ${item.state}`.toLowerCase().includes(search)) : undefined;
+    const searchedIncident = search ? state.incidents.find((incident) => `${incident.title} ${incident.city} ${incident.location} ${incident.district}`.toLowerCase().includes(search)) : undefined;
+    if (searchedCity) { map.flyTo([searchedCity.lat, searchedCity.lng], 12, { duration: .8 }); return; }
+    if (searchedIncident) { map.flyTo([searchedIncident.lat, searchedIncident.lng], 13, { duration: .8 }); return; }
+    const selectedBoundary = boundaryData && 'features' in boundaryData && Array.isArray(boundaryData.features) ? boundaryData.features.find((feature) => featureMatchesLocation(feature as GeoJSON.Feature, locationFilter)) : undefined;
+    if (locationFilter !== 'All India' && selectedBoundary && boundaryLayerRef.current) { const matchingLayer = boundaryLayerRef.current.getLayers().find((layer) => { const feature = (layer as L.Layer & { feature?: GeoJSON.Feature }).feature; return featureMatchesLocation(feature, locationFilter); }); if (matchingLayer && 'getBounds' in matchingLayer) { map.flyToBounds((matchingLayer as L.Polygon).getBounds(), { duration: .8, padding: [28, 28] }); return; } }
+    if (locationFilter === 'All India' && boundaryLayerRef.current) { map.fitBounds(boundaryLayerRef.current.getBounds(), { padding: [28, 28], maxZoom: 6, animate: true }); return; }
+    const fallback = mapLocations[locationFilter] || mapLocations['All India'];
+    map.flyTo([fallback.lat, fallback.lng], fallback.zoom, { duration: .8 });
+  }, [boundaryData, locationFilter, searchQuery, state.incidents]);
 
   useEffect(() => {
     const map = leafletRef.current;
     const markerLayer = markerLayerRef.current;
     if (!map || !markerLayer) return;
-    const requestedLocation = mapLocations[locationFilter] || mapLocations['All India'];
     const search = searchQuery.trim().toLowerCase();
-    const searchedCity = search ? cityDirectory.find((item) => item.city.toLowerCase().includes(search)) : undefined;
-    const searchedIncident = search ? state.incidents.find((incident) => `${incident.title} ${incident.city} ${incident.location}`.toLowerCase().includes(search)) : undefined;
-    const focus = searchedCity ? { lat: searchedCity.lat, lng: searchedCity.lng, zoom: 12 } : searchedIncident ? { lat: searchedIncident.lat, lng: searchedIncident.lng, zoom: 13 } : requestedLocation;
-    map.flyTo([focus.lat, focus.lng], focus.zoom, { duration: 0.8 });
+    const matchesSearch = (text: string) => !search || text.toLowerCase().includes(search);
     markerLayer.clearLayers();
     const incidentIcon = (severity: Severity) => L.divIcon({ className: `map-pin ${severityClass(severity)}`, html: `<span>${severity === 'Critical' ? '!' : severity === 'High' ? '▲' : severity === 'Medium' ? '•' : '✓'}</span>`, iconSize: [34, 34], iconAnchor: [17, 17] });
-    const matchesScope = (item: { state?: string; city?: string; district?: string }) => locationFilter === 'All India' || item.state === locationFilter || item.city === locationFilter || item.district === locationFilter;
-    const matchesSearch = (text: string) => !search || text.toLowerCase().includes(search);
-    state.incidents.filter((incident) => matchesScope(incident) && matchesSearch(`${incident.title} ${incident.city} ${incident.location}`)).forEach((incident) => { const marker = L.marker([incident.lat, incident.lng], { icon: incidentIcon(incident.severity) }).addTo(markerLayer).bindPopup(`<strong>${incident.title}</strong><br/>${incident.location}, ${incident.city}<br/>${incident.severity} · ${incident.trapped} people trapped`); marker.on('click', () => onSelectIncident?.(incident)); });
-    state.teams.filter((team) => matchesScope(team)).forEach((team) => L.marker([team.lat, team.lng], { icon: L.divIcon({ className: 'team-pin', html: '<span>+</span>', iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(markerLayer).bindPopup(`<strong>${team.name}</strong><br/>${team.city}<br/>${team.status} · ${team.response}`));
+    if (layers.incidents) state.incidents.filter((incident) => matchesScope(incident) && matchesSearch(`${incident.title} ${incident.city} ${incident.location}`)).forEach((incident) => { const marker = L.marker([incident.lat, incident.lng], { icon: incidentIcon(incident.severity) }).addTo(markerLayer).bindPopup(popup(incident.title, [`${incident.location}, ${incident.city}`, `${incident.district}, ${incident.state || 'State not supplied'}`, `Severity: ${incident.severity} · Status: ${incident.status}`, `Affected: ${incident.affected} · Trapped: ${incident.trapped}`, `Reported: ${incident.time}`, 'Source: Citizen emergency report'])); marker.on('click', () => onSelectIncident?.(incident)); });
+    if (layers.teams) state.teams.filter((team) => matchesScope(team)).forEach((team) => L.marker([team.lat, team.lng], { icon: L.divIcon({ className: 'team-pin', html: '<span>+</span>', iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(markerLayer).bindPopup(popup(team.name, [`${team.city}${team.state ? `, ${team.state}` : ''}`, `Status: ${team.status}`, `Response: ${team.response}`, `Equipment: ${team.equipment.join(', ')}`, 'Source: Rescue team workspace'])));
+    if (layers.relief) state.resources.filter((resource) => matchesScope(resource) && resource.city).forEach((resource) => { const city = cityDirectory.find((entry) => entry.city === resource.city); if (!city) return; L.marker([city.lat, city.lng], { icon: L.divIcon({ className: 'relief-pin', html: '<span>+</span>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(markerLayer).bindPopup(popup(resource.name, [`${city.city}, ${city.state}`, `Available: ${formatNumber(resource.amount)} ${resource.unit}`, `Threshold: ${formatNumber(resource.threshold)} ${resource.unit}`, 'Source: Relief resources workspace'])); });
+    if (layers.fires) feeds.fireHotspots.filter((fire) => matchesScope({ state: undefined, city: undefined, district: undefined }) && matchesSearch(`${fire.id} ${fire.source}`)).forEach((fire) => L.marker([fire.lat, fire.lng], { icon: L.divIcon({ className: 'fire-pin', html: '<span>×</span>', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(markerLayer).bindPopup(popup('Satellite fire detection', [`${fire.lat.toFixed(4)}, ${fire.lng.toFixed(4)}`, `Brightness: ${fire.brightness ?? 'Not supplied'}`, `Confidence: ${fire.confidence ?? 'Not supplied'}`, `Detected: ${fire.observedAt ?? 'Not supplied'}`, `Source: ${fire.source}`])));
+    if (layers.weather) feeds.weatherWarnings.filter((warning) => typeof warning.lat === 'number' && typeof warning.lng === 'number' && matchesScope(warning) && matchesSearch(`${warning.title} ${warning.state || ''} ${warning.district || ''}`)).forEach((warning) => L.marker([warning.lat as number, warning.lng as number], { icon: L.divIcon({ className: 'weather-pin', html: '<span>!</span>', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(markerLayer).bindPopup(popup(warning.title, [`${warning.city || warning.district || warning.state || 'Location not supplied'}`, `Severity: ${warning.severity || 'Not supplied'}`, warning.detail || 'Details not supplied', `Updated: ${warning.updatedAt || 'Not supplied'}`, `Source: ${warning.source}`])));
     routeLayerRef.current?.removeFrom(map);
     const assignedIncident = state.incidents.find((incident) => matchesScope(incident) && incident.teamId);
     const assignedTeam = assignedIncident ? state.teams.find((team) => team.id === assignedIncident.teamId) : undefined;
-    if (assignedIncident && assignedTeam) routeLayerRef.current = L.polyline([[assignedTeam.lat, assignedTeam.lng], [assignedIncident.lat, assignedIncident.lng]], { color: '#23d6c7', weight: 4, opacity: 0.9, dashArray: '10 8' }).addTo(map).bindTooltip('Estimated demo rescue route · verify road conditions');
+    if (assignedIncident && assignedTeam) routeLayerRef.current = L.polyline([[assignedTeam.lat, assignedTeam.lng], [assignedIncident.lat, assignedIncident.lng]], { color: '#23d6c7', weight: 4, opacity: .9, dashArray: '10 8' }).addTo(map).bindTooltip('Estimated response route · verify road conditions');
     window.setTimeout(() => map.invalidateSize(), 0);
-  }, [state, locationFilter, searchQuery, onSelectIncident]);
+  }, [feeds, layers, locationFilter, onSelectIncident, searchQuery, state]);
 
-  return <div className={`map-wrap ${full ? 'map-full' : ''}`}><div ref={mapRef} className="leaflet-map" /><div className="map-overlay-top"><button className="map-select"><Layers3 size={15} /> Live operations map <ChevronDown size={14} /></button><span className="map-label"><Globe2 size={13} /> DEMO DATA</span></div><div className="map-legend"><span><i className="legend-dot critical-dot" /> Critical</span><span><i className="legend-dot high-dot" /> High</span><span><i className="legend-dot team-dot" /> Rescue team</span><span><i className="legend-line" /> Recommended route</span></div><div className="map-controls"><button className="recenter" onClick={() => leafletRef.current?.flyTo([22.5, 79], 5, { duration: 0.8 })}><Globe2 size={16} /> View All India</button><button className="recenter" disabled={!selectedIncident} onClick={() => selectedIncident && leafletRef.current?.flyTo([selectedIncident.lat, selectedIncident.lng], 13, { duration: 0.8 })}><Map size={16} /> Locate Selected Incident</button></div></div>;
+  const layerItems: Array<{ key: LayerKey; label: string; icon: typeof AlertTriangle; available: boolean }> = [{ key: 'incidents', label: 'Emergency incidents', icon: Siren, available: true }, { key: 'weather', label: 'Weather warnings', icon: CloudLightning, available: feeds.weatherWarnings.length > 0 }, { key: 'fires', label: 'Fire hotspots', icon: Flame, available: feeds.fireHotspots.length > 0 }, { key: 'teams', label: 'Rescue teams', icon: Ambulance, available: state.teams.length > 0 }, { key: 'relief', label: 'Relief centers', icon: Package, available: state.resources.some((resource) => resource.city) }, { key: 'infrastructure', label: 'Critical infrastructure', icon: Building2, available: false }, { key: 'density', label: 'Population density', icon: Users, available: false }];
+  const showAllIndia = () => { const map = leafletRef.current; if (!map) return; if (boundaryLayerRef.current) map.fitBounds(boundaryLayerRef.current.getBounds(), { padding: [28, 28], maxZoom: 6, animate: true }); else map.flyTo([22.5, 79], 5, { duration: .8 }); };
+  const locateIncident = () => { if (selectedIncident) leafletRef.current?.flyTo([selectedIncident.lat, selectedIncident.lng], 14, { duration: .8 }); };
+
+  return <div className={`map-wrap ${full ? 'map-full' : ''}`}><div ref={mapRef} className="leaflet-map" /><div className="map-overlay-top"><div className="map-select"><Layers3 size={15} /> National telemetry canvas <span className="map-live-dot" /></div><span className="map-label"><Globe2 size={13} /> {feeds.status === 'connected' ? 'LIVE SOURCES' : feeds.status === 'partial' ? 'PARTIAL SOURCES' : 'DEMO + STATUS'}</span></div><div className="map-layer-panel"><div className="map-layer-heading"><span>MAP LAYERS</span><small>{boundaryMessage}</small></div>{layerItems.map(({ key, label, icon: Icon, available }) => <button className={`layer-toggle ${layers[key] ? 'active' : ''} ${!available ? 'unavailable' : ''}`} key={key} onClick={() => available && setLayers((current) => ({ ...current, [key]: !current[key] }))} disabled={!available} aria-pressed={layers[key]}><Icon size={13} /><span>{label}</span><i>{available ? (layers[key] ? 'ON' : 'OFF') : 'N/A'}</i></button>)}</div><div className="map-legend"><span><i className="legend-dot critical-dot" /> Incidents</span><span><i className="legend-dot weather-dot" /> Weather</span><span><i className="legend-dot fire-dot" /> Fire</span><span><i className="legend-dot team-dot" /> Teams</span><span><i className="legend-dot relief-dot" /> Relief</span><span><i className="legend-line" /> Response route</span></div><div className="map-controls"><button className="recenter" onClick={showAllIndia}><Globe2 size={16} /> View All India</button><button className="recenter" disabled={!selectedIncident} onClick={locateIncident}><LocateFixed size={16} /> Locate Selected Incident</button></div></div>;
 }
 
 function StatCard({ label, value, detail, icon: Icon, tone, onClick }: { label: string; value: string; detail: string; icon: typeof Activity; tone: string; onClick?: () => void }) {
@@ -208,11 +313,14 @@ function App() {
   const [syncing, setSyncing] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  const [feeds, setFeeds] = useState<LiveFeeds>(emptyFeeds);
   const startNewReport = () => { setEditingIncident(null); setAiError(''); setShowReport(true); };
   const startEditReport = () => { if (selectedIncident) { setEditingIncident(selectedIncident); setAiError(''); setShowReport(true); } };
   const deleteIncident = () => { if (!selectedIncident || !window.confirm(`Delete ${selectedIncident.title}?`)) return; const next = { ...state, incidents: state.incidents.filter((incident) => incident.id !== selectedIncident.id), logs: [{ id: `log-${Date.now()}`, action: 'Incident removed', detail: `${selectedIncident.title} was removed by the control room`, time: nowTime(), status: 'Completed' as const }, ...state.logs] }; void persist(next); setSelectedIncident(next.incidents[0] || null); };
+  const refreshFeeds = useCallback(async () => { setFeeds((current) => ({ ...current, status: 'loading' })); try { setFeeds(await fetchLiveFeeds()); } catch { setFeeds({ ...emptyFeeds, messages: ['Live source gateway unavailable.'] }); } }, []);
 
-  useEffect(() => { const load = async () => { if (!supabase) return; const { data } = await supabase.from('rescuemesh_state').select('payload').eq('id', 'workspace').maybeSingle(); if (data?.payload && typeof data.payload === 'object') setState(data.payload as AppState); }; void load(); }, []);
+  useEffect(() => { let active = true; const load = async () => { if (!supabase) return; const { data } = await supabase.from('rescuemesh_state').select('payload').eq('id', 'workspace').maybeSingle(); if (active && data?.payload && typeof data.payload === 'object') setState(data.payload as AppState); }; void load(); if (!supabase) return () => { active = false; }; const channel = supabase.channel('rescuemesh-state-sync').on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rescuemesh_state', filter: 'id=eq.workspace' }, (change) => { const next = change.new as { payload?: unknown }; if (active && next.payload && typeof next.payload === 'object') setState(next.payload as AppState); }).subscribe(); return () => { active = false; void supabase.removeChannel(channel); }; }, []);
+  useEffect(() => { void refreshFeeds(); const timer = window.setInterval(() => void refreshFeeds(), 300000); return () => window.clearInterval(timer); }, [refreshFeeds]);
   const persist = async (next: AppState) => { setState(next); setSyncing(true); if (supabase) { const { error } = await supabase.from('rescuemesh_state').upsert({ id: 'workspace', payload: next, updated_at: new Date().toISOString() }); if (error) setAiError('Cloud save unavailable; the current change remains visible locally.'); } setTimeout(() => setSyncing(false), 500); };
   const resetDemo = () => { void persist(initialState); setSelectedIncident(initialState.incidents[0]); };
   const scopeMatch = (item: { state?: string; city?: string; district?: string }) => locationScope === 'All India' || item.state === locationScope || item.city === locationScope || item.district === locationScope;
