@@ -92,6 +92,28 @@ async function checkSource(url: string): Promise<boolean> {
   }
 }
 
+function severityFromText(text: string) {
+  if (/red (alert|warning)|do not enter|severe/i.test(text)) return "Critical";
+  if (/orange (alert|warning)|heavy|warning/i.test(text)) return "High";
+  if (/watch|advisory|moderate/i.test(text)) return "Medium";
+  return "Low";
+}
+
+function parseAlerts(text: string, sourceName: string) {
+  try {
+    const document = new DOMParser().parseFromString(text, "text/xml");
+    const entries = Array.from(document.querySelectorAll("entry, item"));
+    return entries.slice(0, 60).map((entry, index) => {
+      const title = (entry.querySelector("title")?.textContent || "Official alert").trim().slice(0, 160);
+      const summary = (entry.querySelector("summary, description")?.textContent || "").trim().replace(/\s+/g, " ").slice(0, 300);
+      const updated = entry.querySelector("updated, pubDate, published")?.textContent || undefined;
+      return { id: `${sourceName}-${index}-${title.slice(0, 24)}`, title, detail: summary || undefined, severity: severityFromText(`${title} ${summary}`) as "Critical" | "High" | "Medium" | "Low", source: sourceName, updatedAt: updated ? new Date(updated).toISOString() : undefined };
+    }).filter((alert) => alert.title);
+  } catch {
+    return [];
+  }
+}
+
 async function liveFeeds() {
   const sources: FeedSource[] = [];
   const messages: string[] = [];
@@ -112,16 +134,35 @@ async function liveFeeds() {
     }
   }
 
+  const alertEndpoints: Array<{ name: string; url: string }> = [
+    { name: "NDMA SACHET", url: "https://sachet.ndma.gov.in/rss/RSS.xml" },
+    { name: "NDMA SACHET", url: "https://sachet.ndma.gov.in/rss" },
+  ];
+  const alertRecords: Array<{ id: string; title: string; detail?: string; severity: string; source: string; updatedAt?: string }> = [];
+  for (const endpoint of alertEndpoints) {
+    try {
+      const response = await fetch(endpoint.url, { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) continue;
+      const parsed = parseAlerts(await response.text(), endpoint.name);
+      if (parsed.length) { alertRecords.push(...parsed); sources.push({ name: endpoint.name, status: "connected", detail: `${parsed.length} official alert records returned.` }); break; }
+    } catch {
+      // try the next endpoint
+    }
+  }
   const [sachetOnline, imdOnline] = await Promise.all([
     checkSource("https://sachet.ndma.gov.in"),
     checkSource("https://api.imd.gov.in/public/api_reference.html"),
   ]);
-  sources.push({ name: "NDMA SACHET", status: sachetOnline ? "portal_reachable" : "unavailable", detail: sachetOnline ? "Official alert portal is reachable. A machine-readable CAP/RSS feed is not exposed through this gateway." : "Official SACHET portal could not be reached." });
-  sources.push({ name: "IMD", status: imdOnline ? "portal_reachable" : "unavailable", detail: imdOnline ? "Official API reference is reachable. No warning feed has been configured in this workspace." : "Official IMD API reference could not be reached." });
-  if (sachetOnline || imdOnline) messages.push("Official warning portals are reachable, but no alert records were returned by a configured machine-readable feed.");
+  if (!alertRecords.length) {
+    sources.push({ name: "NDMA SACHET", status: sachetOnline ? "portal_reachable" : "unavailable", detail: sachetOnline ? "Official alert portal is reachable, but it returned no machine-readable CAP/RSS records." : "Official SACHET portal could not be reached." });
+    sources.push({ name: "IMD", status: imdOnline ? "portal_reachable" : "unavailable", detail: imdOnline ? "Official API reference is reachable. No warning feed has been configured in this workspace." : "Official IMD API reference could not be reached." });
+    messages.push("Official warning portals are reachable, but no machine-readable alert feed is available, so no official warning pins are drawn.");
+  } else if (!imdOnline) {
+    sources.push({ name: "IMD", status: "unavailable", detail: "Official IMD API reference could not be reached." });
+  }
   const connected = sources.some((source) => source.status === "connected");
   const partial = sources.some((source) => source.status === "portal_reachable") || sources.some((source) => source.status === "unavailable");
-  return { status: connected ? "connected" : partial ? "partial" : "offline", fireHotspots, weatherWarnings: [], sources, lastUpdated: new Date().toISOString(), messages };
+  return { status: connected ? "connected" : partial ? "partial" : "offline", fireHotspots, floodAlerts: alertRecords, weatherWarnings: [], sources, lastUpdated: new Date().toISOString(), messages };
 }
 
 async function callOpenRouter(messages: Array<{ role: string; content: unknown }>, model?: string) {
